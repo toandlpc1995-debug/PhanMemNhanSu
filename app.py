@@ -16,8 +16,8 @@ import time
 st.set_page_config(page_title="Phần mềm Tổng hợp Nhân sự", layout="wide", initial_sidebar_state="expanded")
 st.title("PHẦN MỀM TỔNG HỢP NHÂN SỰ TỪ SƠ YẾU LÝ LỊCH")
 
-# Đổi tên CSDL để ép phần mềm dọn rác cũ, tạo CSDL mới chuẩn xác 100%
-LOCAL_DB = "DuLieu_NhanSu_Final.csv"
+# Tên CSDL mới để làm mới hoàn toàn dữ liệu sau khi sửa thuật toán
+LOCAL_DB = "DuLieu_NhanSu_v3.csv"
 
 def load_local_db():
     if os.path.exists(LOCAL_DB):
@@ -100,7 +100,6 @@ def parse_records(text):
     parsed.sort(key=lambda x: x['Năm'], reverse=True) 
     return parsed
 
-# HÀM XỬ LÝ NGÀY THÁNG ĐÃ ĐƯỢC GIA CỐ (CHỐNG LỖI 100%)
 def parse_date(date_str):
     date_str = str(date_str).strip().lower()
     if 'nay' in date_str or 'hiện tại' in date_str or 'hiện nay' in date_str: 
@@ -110,7 +109,7 @@ def parse_date(date_str):
         if len(nums) >= 3: 
             y, m, d = int(nums[-1]), int(nums[-2]), int(nums[-3])
             if y < 100: y += 2000
-            if y < 1000 and d > 1000: y, d = d, y # Đề phòng gõ ngược YYYY/MM/DD
+            if y < 1000 and d > 1000: y, d = d, y
             return datetime(y, m, d)
         elif len(nums) == 2: 
             y, m = int(nums[-1]), int(nums[-2])
@@ -198,7 +197,7 @@ if not df_employees.empty:
 tab1, tab2, tab3 = st.tabs(["1. Khen thưởng", "2. Kỷ luật", "3. Quy đổi hệ số năm công tác"])
 
 # ==========================================
-# TAB 1 & 2 KHÔNG THAY ĐỔI LỚN
+# TAB 1: KHEN THƯỞNG
 # ==========================================
 with tab1:
     st.header("Báo cáo Khen thưởng")
@@ -240,6 +239,9 @@ with tab1:
                 else: st.write("Không có dữ liệu khen thưởng.")
     else: st.info("Hệ thống chưa có dữ liệu.")
 
+# ==========================================
+# TAB 2: KỶ LUẬT
+# ==========================================
 with tab2:
     st.header("Báo cáo Kỷ luật")
     if not df_employees.empty:
@@ -358,25 +360,31 @@ with tab3:
                     dong = re.sub(r'^[-+*•]\s*', '', dong)
                     if not dong: continue
                     
-                    # SIÊU LỌC REGEX: Ưu tiên chộp ngày tháng định dạng ĐẦY ĐỦ NHẤT trước
+                    start_str, end_str, chuc_danh_day_du = None, None, None
                     regex_date = r'(nay|hiện tại|hiện nay|tháng\s+\d{1,2}[/-]\d{2,4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}[/-]\d{2,4}|\d{4})'
-                    match = re.search(rf'(?i)^(?:từ\s+)?{regex_date}\s*(?:đến|-|–|—|->|=>)\s*{regex_date}\s*[:,\-|]?\s*(.*)$', dong)
                     
-                    if match:
-                        start_str = match.group(1).strip()
-                        end_str = match.group(2).strip()
-                        chuc_danh_day_du = match.group(3).strip()
-                        
-                        # Dọn dẹp từ thừa nếu có bị dính vào
-                        start_str = re.sub(r'(?i)^(từ|tháng)\s+', '', start_str).strip()
-                        chuc_danh_day_du = re.sub(r'^[:,\-|]\s*', '', chuc_danh_day_du).strip()
+                    # Trượng hợp 1: Có cả bắt đầu và kết thúc (Từ A đến B)
+                    match_full = re.search(rf'(?i)^(?:từ\s+)?{regex_date}\s*(?:đến|-|–|—|->|=>)\s*{regex_date}\s*[:,\-|]?\s*(.*)$', dong)
+                    
+                    if match_full:
+                        start_str = match_full.group(1).strip()
+                        end_str = match_full.group(2).strip()
+                        chuc_danh_day_du = match_full.group(3).strip()
+                    else:
+                        # Trường hợp 2: Chỉ có ngày bắt đầu (Từ A: Chức danh...) -> Ngầm định là Đến nay
+                        match_single = re.search(rf'(?i)^(?:từ\s+)?{regex_date}\s*[:,\-|]\s*(.*)$', dong)
+                        if match_single:
+                            start_str = match_single.group(1).strip()
+                            end_str = "nay"  # Tự động gán bằng hôm nay
+                            chuc_danh_day_du = match_single.group(2).strip()
+                            
+                    if start_str and end_str and chuc_danh_day_du:
+                        title_lower = chuc_danh_day_du.lower()
                         
                         start_date = parse_date(start_str)
                         end_date = parse_date(end_str)
                         
                         if start_date and end_date:
-                            title_lower = chuc_danh_day_du.lower()
-                            
                             is_blacklisted = any(b in title_lower for b in blacklist)
                             has_whitelist = False
                             nhom_chuc_danh = "Khác (Hệ số 1.0)"
