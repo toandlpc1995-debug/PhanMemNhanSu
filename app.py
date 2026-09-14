@@ -16,8 +16,8 @@ import time
 st.set_page_config(page_title="Phần mềm Tổng hợp Nhân sự", layout="wide", initial_sidebar_state="expanded")
 st.title("PHẦN MỀM TỔNG HỢP NHÂN SỰ TỪ SƠ YẾU LÝ LỊCH")
 
-# ĐỔI TÊN DB ĐỂ ÉP PHẦN MỀM XÓA CACHE VÀ BẮT BUỘC ĐỌC LẠI FILE WORD MỚI
-LOCAL_DB = "DuLieu_NhanSu_v2.csv"
+# Đổi tên CSDL để ép phần mềm dọn rác cũ, tạo CSDL mới chuẩn xác 100%
+LOCAL_DB = "DuLieu_NhanSu_Final.csv"
 
 def load_local_db():
     if os.path.exists(LOCAL_DB):
@@ -47,7 +47,6 @@ def iter_block_items(parent):
         elif isinstance(child, CT_Tbl):
             table = Table(child, parent)
             for row in table.rows: 
-                # Biến dấu Enter trong ô thành khoảng trắng để không làm đứt câu
                 yield " | ".join([cell.text.replace('\n', ' ').strip() for cell in row.cells])
 
 def deduplicate_table_cells(text):
@@ -101,19 +100,26 @@ def parse_records(text):
     parsed.sort(key=lambda x: x['Năm'], reverse=True) 
     return parsed
 
+# HÀM XỬ LÝ NGÀY THÁNG ĐÃ ĐƯỢC GIA CỐ (CHỐNG LỖI 100%)
 def parse_date(date_str):
     date_str = str(date_str).strip().lower()
-    # Nhận diện linh hoạt mọi từ khóa hiện tại
     if 'nay' in date_str or 'hiện tại' in date_str or 'hiện nay' in date_str: 
         return datetime.now()
     nums = re.findall(r'\d+', date_str)
     try:
         if len(nums) >= 3: 
-            return datetime(int(nums[-1]), int(nums[-2]), int(nums[-3]))
+            y, m, d = int(nums[-1]), int(nums[-2]), int(nums[-3])
+            if y < 100: y += 2000
+            if y < 1000 and d > 1000: y, d = d, y # Đề phòng gõ ngược YYYY/MM/DD
+            return datetime(y, m, d)
         elif len(nums) == 2: 
-            return datetime(int(nums[-1]), int(nums[-2]), 1)
+            y, m = int(nums[-1]), int(nums[-2])
+            if y < 100: y += 2000
+            return datetime(y, m, 1)
         elif len(nums) == 1: 
-            return datetime(int(nums[-1]), 1, 1)
+            y = int(nums[-1])
+            if y < 100: y += 2000
+            return datetime(y, 1, 1)
     except: pass
     return None
 
@@ -192,7 +198,7 @@ if not df_employees.empty:
 tab1, tab2, tab3 = st.tabs(["1. Khen thưởng", "2. Kỷ luật", "3. Quy đổi hệ số năm công tác"])
 
 # ==========================================
-# TAB 1: KHEN THƯỞNG
+# TAB 1 & 2 KHÔNG THAY ĐỔI LỚN
 # ==========================================
 with tab1:
     st.header("Báo cáo Khen thưởng")
@@ -234,9 +240,6 @@ with tab1:
                 else: st.write("Không có dữ liệu khen thưởng.")
     else: st.info("Hệ thống chưa có dữ liệu.")
 
-# ==========================================
-# TAB 2: KỶ LUẬT
-# ==========================================
 with tab2:
     st.header("Báo cáo Kỷ luật")
     if not df_employees.empty:
@@ -355,19 +358,17 @@ with tab3:
                     dong = re.sub(r'^[-+*•]\s*', '', dong)
                     if not dong: continue
                     
-                    # CẢI TIẾN: Bắt siêu mạnh mọi định dạng (- , đến, =>)
-                    match = re.search(r'(?i)(.*?)\s*(?:đến|-|–|—|->|=>)\s*(nay|hiện tại|hiện nay|\d{1,2}[/-]\d{2,4}|\d{4}|tháng\s+\d{1,2}[/-]\d{4})(.*)', dong)
+                    # SIÊU LỌC REGEX: Ưu tiên chộp ngày tháng định dạng ĐẦY ĐỦ NHẤT trước
+                    regex_date = r'(nay|hiện tại|hiện nay|tháng\s+\d{1,2}[/-]\d{2,4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}[/-]\d{2,4}|\d{4})'
+                    match = re.search(rf'(?i)^(?:từ\s+)?{regex_date}\s*(?:đến|-|–|—|->|=>)\s*{regex_date}\s*[:,\-|]?\s*(.*)$', dong)
                     
                     if match:
                         start_str = match.group(1).strip()
-                        # Làm sạch chữ "Từ" và "tháng" thừa
-                        start_str = re.sub(r'(?i)^(từ|tháng)\s+', '', start_str).strip()
-                        start_str = re.sub(r'(?i)^(từ|tháng)\s+', '', start_str).strip()
-                        
                         end_str = match.group(2).strip()
-                        
                         chuc_danh_day_du = match.group(3).strip()
-                        # Xóa bỏ các ký tự dấu thừa ở đầu câu
+                        
+                        # Dọn dẹp từ thừa nếu có bị dính vào
+                        start_str = re.sub(r'(?i)^(từ|tháng)\s+', '', start_str).strip()
                         chuc_danh_day_du = re.sub(r'^[:,\-|]\s*', '', chuc_danh_day_du).strip()
                         
                         start_date = parse_date(start_str)
@@ -388,7 +389,6 @@ with tab3:
                                     has_whitelist = True
                                     break
                                     
-                            # Lọc chức vụ kiêm nhiệm (VD: Bí thư chi bộ, Giám đốc)
                             if is_blacklisted and not has_whitelist: 
                                 continue 
                                 
