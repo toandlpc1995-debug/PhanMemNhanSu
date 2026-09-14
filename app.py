@@ -100,7 +100,8 @@ def parse_records(text):
 
 def parse_date(date_str):
     date_str = str(date_str).strip().lower()
-    if 'nay' in date_str: return datetime.now()
+    # Hỗ trợ cực mạnh chữ "nay" và "hiện tại"
+    if 'nay' in date_str or 'hiện tại' in date_str: return datetime.now()
     nums = re.findall(r'\d+', date_str)
     try:
         if len(nums) == 2: return datetime(int(nums[1]), int(nums[0]), 1)
@@ -275,11 +276,8 @@ with tab3:
     st.header("Tính toán quy đổi thời gian công tác")
     
     if not df_employees.empty:
-        # BỘ LỌC ĐEN (Bỏ qua hoàn toàn, không tính năm)
         blacklist = ["đảng", "bí thư", "chi ủy", "chi uỷ", "cấp ủy", "cấp uỷ", "thường vụ", "uỷ viên", "ủy viên", "chi bộ", "đoàn", "đoàn thanh niên", "chi đoàn", "chiến sĩ", "bộ đội", "quân sự", "tổng cục kỹ thuật", "chi hội", "dân quân"]
         
-        # BỘ MAP CHỨC DANH (Tự động gom các chức danh dài thành chức danh ngắn gọn)
-        # Sắp xếp các cụm từ dài lên trước để ưu tiên nhận diện chính xác
         chuc_danh_mapping = {
             "phó chủ tịch công đoàn": "Phó Chủ tịch Công đoàn",
             "chủ tịch công đoàn": "Chủ tịch Công đoàn",
@@ -302,14 +300,14 @@ with tab3:
             "phó ban": "Phó ban",
             "trưởng ban": "Trưởng ban",
             "đội phó": "Đội phó",
+            "Công nhân": "Công nhân",
             "đội trưởng": "Đội trưởng"
         }
 
         st.subheader("1. Bảng thiết lập Hệ số Quy đổi")
-        st.write("💡 Các chức danh Đảng/Đoàn/Quân sự đã được hệ thống tự động loại trừ khỏi thời gian công tác. Các chức danh không nằm trong danh sách dưới đây sẽ tự động tính hệ số = 1.0.")
+        st.write("💡 Các chức danh Đảng/Đoàn/Quân sự đã được tự động loại trừ. Các chức danh không nằm trong danh sách dưới đây sẽ tự động tính hệ số = 1.0.")
         
         he_so_dict = {}
-        # Lấy ra danh sách các chức danh duy nhất đã được gom nhóm (Value của Dict)
         unique_mapped_titles = sorted(list(set(chuc_danh_mapping.values())))
         
         cols = st.columns(4)
@@ -319,79 +317,104 @@ with tab3:
                 he_so_dict[chuc_danh] = float(val) if val.replace('.','',1).isdigit() else 1.0
 
         st.divider()
+        
+        loai_loc_t3 = st.radio("Tùy chọn xuất báo cáo Hệ số:", ("Xuất Tất cả Cán bộ / Nhân viên", "Xuất theo từng Cán bộ / Nhân viên"), key="radio_t3")
+        
+        df_target = df_employees.copy()
+        if loai_loc_t3 == "Xuất theo từng Cán bộ / Nhân viên":
+            col_search, _ = st.columns([7, 3])
+            with col_search:
+                ns_chon_t3 = st.selectbox("Tìm kiếm Cán bộ / Nhân viên:", danh_sach_tim_kiem, key="sb_t3")
+            if ns_chon_t3:
+                so_hieu_chon = ns_chon_t3.split(']')[0].replace('[', '')
+                df_target = df_employees[df_employees['SoHieu'] == so_hieu_chon]
+            else:
+                df_target = pd.DataFrame()
+
         col11, col12 = st.columns([7, 3])
-        with col11: st.subheader("2. Chi tiết Quy đổi từng Cán bộ / Nhân viên")
+        with col11: st.subheader("2. Chi tiết Quy đổi")
         
         all_results_for_excel = [] 
         
-        for index, row in df_employees.iterrows():
-            tong_thang_thuc = 0
-            tong_thang_quydoi = 0
-            person_data = []
-            
-            for dong in str(row['QuaTrinhCongTac']).split('\n'):
-                time_match = re.search(r'(?:Từ|từ)\s+(.*?)\s+(?:đến|Đến)\s+(.*?)\s*:', dong)
-                if time_match:
-                    start_str, end_str = time_match.group(1), time_match.group(2)
-                    start_date, end_date = parse_date(start_str), parse_date(end_str)
+        if not df_target.empty:
+            for index, row in df_target.iterrows():
+                tong_thang_thuc = 0
+                tong_thang_quydoi = 0
+                person_data = []
+                
+                for dong in str(row['QuaTrinhCongTac']).split('\n'):
+                    dong = dong.strip()
+                    dong = re.sub(r'^[-+*•]\s*', '', dong) # Dọn dẹp dấu gạch đầu dòng
+                    if not dong: continue
                     
-                    if start_date and end_date:
-                        chuc_danh_day_du = dong.split(':', 1)[1].strip()
-                        title_lower = chuc_danh_day_du.lower()
+                    # CẢI TIẾN SIÊU MẠNH: Bắt mọi thể loại thời gian (có hai chấm, không hai chấm, gạch ngang, v.v)
+                    match = re.search(r'(?i)^(?:từ\s+)?(.*?)\s+(?:đến|-)\s+(.*?)\s*[:,\-]\s*(.*)$', dong)
+                    if not match:
+                        match = re.search(r'(?i)^(?:từ\s+)?(.*?)\s+(?:đến|-)\s+(nay|hiện tại|\d{1,2}[/-]\d{4}|\d{4}|tháng\s+\d{1,2}[/-]\d{4})\s+(.*)$', dong)
                         
-                        # BƯỚC 1: Lọc bỏ chức danh Đảng/Đoàn/Quân sự
-                        if any(b in title_lower for b in blacklist):
-                            continue 
-                            
-                        # Tính thời gian thực tế
-                        so_thang = max(0, (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month))
-                        tong_thang_thuc += so_thang
+                    if match:
+                        start_str = match.group(1).strip()
+                        end_str = match.group(2).strip()
+                        chuc_danh_day_du = match.group(3).strip()
                         
-                        # BƯỚC 2: Gom nhóm chức danh để tìm hệ số
-                        nhom_chuc_danh = "Khác (Hệ số 1.0)"
-                        hs_apdung = 1.0
+                        start_date = parse_date(start_str)
+                        end_date = parse_date(end_str)
                         
-                        for key_nhan_dien, ten_nhom in chuc_danh_mapping.items():
-                            if key_nhan_dien in title_lower:
-                                nhom_chuc_danh = ten_nhom
-                                hs_apdung = he_so_dict.get(ten_nhom, 1.0)
-                                break
+                        if start_date and end_date:
+                            title_lower = chuc_danh_day_du.lower()
+                            if any(b in title_lower for b in blacklist): continue 
                                 
-                        thang_qd = so_thang * hs_apdung
-                        tong_thang_quydoi += thang_qd
-                        
-                        person_data.append({
-                            "Giai đoạn": f"{start_str} ➔ {end_str}",
-                            "Chức danh (Gốc)": chuc_danh_day_du,
-                            "Nhóm áp dụng": nhom_chuc_danh,
-                            "Thực (Năm)": so_thang // 12,
-                            "Thực (Tháng)": so_thang % 12,
-                            "Hệ số": hs_apdung,
-                            "Quy đổi (Năm)": int(thang_qd // 12),
-                            "Quy đổi (Tháng)": round(thang_qd % 12, 1),
-                            "Tổng (Tháng)": round(thang_qd, 1)
-                        })
-                        
-            if person_data:
-                st.markdown(f"#### 👤 {row['HoTen']}")
-                st.caption(f"Số hiệu: {row['SoHieu']} | Đơn vị hiện tại: {row['DonVi']}")
-                
-                df_person = pd.DataFrame(person_data)
-                st.dataframe(df_person, use_container_width=True, hide_index=True)
-                
-                nam_thuc, thang_thuc_le = int(tong_thang_thuc // 12), int(tong_thang_thuc % 12)
-                nam_qd, thang_qd_le = int(tong_thang_quydoi // 12), round(tong_thang_quydoi % 12, 1)
-                st.success(f"**TỔNG CỘNG:** Thực tế làm việc: **{nam_thuc} năm {thang_thuc_le} tháng** ➔ Sau quy đổi: **{nam_qd} năm {thang_qd_le} tháng** (Tổng: {round(tong_thang_quydoi, 1)} tháng)")
-                
-                for p in person_data:
-                    p_copy = p.copy()
-                    p_copy["Số hiệu"], p_copy["Họ và Tên"] = row['SoHieu'], row['HoTen']
-                    all_results_for_excel.append(p_copy)
-                st.divider() 
-        
-        with col12:
-            if all_results_for_excel:
-                df_all_export = pd.DataFrame(all_results_for_excel)
-                cols = ["Số hiệu", "Họ và Tên", "Giai đoạn", "Chức danh (Gốc)", "Nhóm áp dụng", "Thực (Năm)", "Thực (Tháng)", "Hệ số", "Quy đổi (Năm)", "Quy đổi (Tháng)", "Tổng (Tháng)"]
-                df_all_export = df_all_export[cols]
-                st.download_button("📥 TẢI EXCEL TỔNG HỢP HỆ SỐ", data=convert_df_to_excel(df_all_export, "QuyDoiHeSo"), file_name="TongHop_HeSoQuyDoi.xlsx", type="primary", use_container_width=True)
+                            so_thang = max(0, (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month))
+                            tong_thang_thuc += so_thang
+                            
+                            nhom_chuc_danh = "Khác (Hệ số 1.0)"
+                            hs_apdung = 1.0
+                            
+                            for key_nhan_dien, ten_nhom in chuc_danh_mapping.items():
+                                if key_nhan_dien in title_lower:
+                                    nhom_chuc_danh = ten_nhom
+                                    hs_apdung = he_so_dict.get(ten_nhom, 1.0)
+                                    break
+                                    
+                            thang_qd = so_thang * hs_apdung
+                            tong_thang_quydoi += thang_qd
+                            
+                            person_data.append({
+                                "Giai đoạn": f"{start_str} ➔ {end_str}",
+                                "Chức danh (Gốc)": chuc_danh_day_du,
+                                "Nhóm áp dụng": nhom_chuc_danh,
+                                "Thực (Năm)": so_thang // 12,
+                                "Thực (Tháng)": so_thang % 12,
+                                "Hệ số": hs_apdung,
+                                "Quy đổi (Năm)": int(thang_qd // 12),
+                                "Quy đổi (Tháng)": round(thang_qd % 12, 1),
+                                "Tổng (Tháng)": round(thang_qd, 1)
+                            })
+                            
+                if person_data:
+                    st.markdown(f"#### 👤 {row['HoTen']}")
+                    st.caption(f"Số hiệu: {row['SoHieu']} | Đơn vị hiện tại: {row['DonVi']}")
+                    
+                    df_person = pd.DataFrame(person_data)
+                    st.dataframe(df_person, use_container_width=True, hide_index=True)
+                    
+                    nam_thuc, thang_thuc_le = int(tong_thang_thuc // 12), int(tong_thang_thuc % 12)
+                    nam_qd, thang_qd_le = int(tong_thang_quydoi // 12), round(tong_thang_quydoi % 12, 1)
+                    st.success(f"**TỔNG CỘNG:** Thực tế làm việc: **{nam_thuc} năm {thang_thuc_le} tháng** ➔ Sau quy đổi: **{nam_qd} năm {thang_qd_le} tháng** (Tổng: {round(tong_thang_quydoi, 1)} tháng)")
+                    
+                    for p in person_data:
+                        p_copy = p.copy()
+                        p_copy["Số hiệu"], p_copy["Họ và Tên"] = row['SoHieu'], row['HoTen']
+                        all_results_for_excel.append(p_copy)
+                    st.divider() 
+            
+            with col12:
+                if all_results_for_excel:
+                    df_all_export = pd.DataFrame(all_results_for_excel)
+                    cols = ["Số hiệu", "Họ và Tên", "Giai đoạn", "Chức danh (Gốc)", "Nhóm áp dụng", "Thực (Năm)", "Thực (Tháng)", "Hệ số", "Quy đổi (Năm)", "Quy đổi (Tháng)", "Tổng (Tháng)"]
+                    df_all_export = df_all_export[cols]
+                    
+                    if loai_loc_t3 == "Xuất Tất cả Cán bộ / Nhân viên":
+                        st.download_button("📥 TẢI EXCEL TẤT CẢ (TỔNG HỢP)", data=convert_df_to_excel(df_all_export, "QuyDoiHeSo"), file_name="TongHop_HeSoQuyDoi_TatCa.xlsx", type="primary", use_container_width=True)
+                    else:
+                        st.download_button("📥 TẢI EXCEL CÁ NHÂN", data=convert_df_to_excel(df_all_export, "QuyDoiHeSo"), file_name=f"QuyDoiHeSo_{df_target.iloc[0]['SoHieu']}.xlsx", type="primary", use_container_width=True)
