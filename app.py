@@ -16,7 +16,8 @@ import time
 st.set_page_config(page_title="Phần mềm Tổng hợp Nhân sự", layout="wide", initial_sidebar_state="expanded")
 st.title("PHẦN MỀM TỔNG HỢP NHÂN SỰ TỪ SƠ YẾU LÝ LỊCH")
 
-LOCAL_DB = "DuLieu_NhanSu.csv"
+# ĐỔI TÊN DB ĐỂ ÉP PHẦN MỀM XÓA CACHE VÀ BẮT BUỘC ĐỌC LẠI FILE WORD MỚI
+LOCAL_DB = "DuLieu_NhanSu_v2.csv"
 
 def load_local_db():
     if os.path.exists(LOCAL_DB):
@@ -45,7 +46,9 @@ def iter_block_items(parent):
         if isinstance(child, CT_P): yield Paragraph(child, parent).text
         elif isinstance(child, CT_Tbl):
             table = Table(child, parent)
-            for row in table.rows: yield " | ".join([cell.text for cell in row.cells])
+            for row in table.rows: 
+                # Biến dấu Enter trong ô thành khoảng trắng để không làm đứt câu
+                yield " | ".join([cell.text.replace('\n', ' ').strip() for cell in row.cells])
 
 def deduplicate_table_cells(text):
     if not text: return ""
@@ -100,12 +103,17 @@ def parse_records(text):
 
 def parse_date(date_str):
     date_str = str(date_str).strip().lower()
-    # Hỗ trợ cực mạnh chữ "nay" và "hiện tại"
-    if 'nay' in date_str or 'hiện tại' in date_str: return datetime.now()
+    # Nhận diện linh hoạt mọi từ khóa hiện tại
+    if 'nay' in date_str or 'hiện tại' in date_str or 'hiện nay' in date_str: 
+        return datetime.now()
     nums = re.findall(r'\d+', date_str)
     try:
-        if len(nums) == 2: return datetime(int(nums[1]), int(nums[0]), 1)
-        elif len(nums) >= 3: return datetime(int(nums[2]), int(nums[1]), int(nums[0]))
+        if len(nums) >= 3: 
+            return datetime(int(nums[-1]), int(nums[-2]), int(nums[-3]))
+        elif len(nums) == 2: 
+            return datetime(int(nums[-1]), int(nums[-2]), 1)
+        elif len(nums) == 1: 
+            return datetime(int(nums[-1]), 1, 1)
     except: pass
     return None
 
@@ -344,29 +352,32 @@ with tab3:
                 
                 for dong in str(row['QuaTrinhCongTac']).split('\n'):
                     dong = dong.strip()
-                    dong = re.sub(r'^[-+*•]\s*', '', dong) # Dọn dẹp dấu gạch đầu dòng
+                    dong = re.sub(r'^[-+*•]\s*', '', dong)
                     if not dong: continue
                     
-                    # CẢI TIẾN SIÊU MẠNH: Bắt mọi thể loại thời gian (có hai chấm, không hai chấm, gạch ngang, v.v)
-                    match = re.search(r'(?i)^(?:từ\s+)?(.*?)\s+(?:đến|-)\s+(.*?)\s*[:,\-]\s*(.*)$', dong)
-                    if not match:
-                        match = re.search(r'(?i)^(?:từ\s+)?(.*?)\s+(?:đến|-)\s+(nay|hiện tại|\d{1,2}[/-]\d{4}|\d{4}|tháng\s+\d{1,2}[/-]\d{4})\s+(.*)$', dong)
-                        
+                    # CẢI TIẾN: Bắt siêu mạnh mọi định dạng (- , đến, =>)
+                    match = re.search(r'(?i)(.*?)\s*(?:đến|-|–|—|->|=>)\s*(nay|hiện tại|hiện nay|\d{1,2}[/-]\d{2,4}|\d{4}|tháng\s+\d{1,2}[/-]\d{4})(.*)', dong)
+                    
                     if match:
                         start_str = match.group(1).strip()
+                        # Làm sạch chữ "Từ" và "tháng" thừa
+                        start_str = re.sub(r'(?i)^(từ|tháng)\s+', '', start_str).strip()
+                        start_str = re.sub(r'(?i)^(từ|tháng)\s+', '', start_str).strip()
+                        
                         end_str = match.group(2).strip()
+                        
                         chuc_danh_day_du = match.group(3).strip()
+                        # Xóa bỏ các ký tự dấu thừa ở đầu câu
+                        chuc_danh_day_du = re.sub(r'^[:,\-|]\s*', '', chuc_danh_day_du).strip()
                         
                         start_date = parse_date(start_str)
                         end_date = parse_date(end_str)
                         
                         if start_date and end_date:
                             title_lower = chuc_danh_day_du.lower()
-                            if any(b in title_lower for b in blacklist): continue 
-                                
-                            so_thang = max(0, (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month))
-                            tong_thang_thuc += so_thang
                             
+                            is_blacklisted = any(b in title_lower for b in blacklist)
+                            has_whitelist = False
                             nhom_chuc_danh = "Khác (Hệ số 1.0)"
                             hs_apdung = 1.0
                             
@@ -374,8 +385,16 @@ with tab3:
                                 if key_nhan_dien in title_lower:
                                     nhom_chuc_danh = ten_nhom
                                     hs_apdung = he_so_dict.get(ten_nhom, 1.0)
+                                    has_whitelist = True
                                     break
                                     
+                            # Lọc chức vụ kiêm nhiệm (VD: Bí thư chi bộ, Giám đốc)
+                            if is_blacklisted and not has_whitelist: 
+                                continue 
+                                
+                            so_thang = max(0, (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month))
+                            tong_thang_thuc += so_thang
+                            
                             thang_qd = so_thang * hs_apdung
                             tong_thang_quydoi += thang_qd
                             
